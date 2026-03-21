@@ -1,0 +1,120 @@
+[project]
+name = "nonebot-plugin-nospam"
+version = "0.1.0"
+description = "QQ群防刷屏，nonebot2插件"
+readme = "README.md"
+requires-python = ">=3.10, <4.0"
+authors = [
+    {name = "TU-O0T", email = "hxfcs@outlook.com"},
+]
+keywords = ["nonebot", "nonebot2", "qq", "spam", "moderation"]
+classifiers = [
+    "Framework :: AsyncIO",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "nonebot2>=2.4.4",
+    "pillow>=10.4.0",
+]
+
+[project.urls]
+homepage = "https://github.com/TU-O0T/nonebot-plugin-nospam"
+Repository = "https://github.com/TU-O0T/nonebot-plugin-nospam.git"
+Documentation = "https://github.com/TU-O0T/nonebot-plugin-nospam#readme"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "nonebot2[fastapi]>=2.4.4",
+    "pillow>=10.4.0",
+    "pyright>=1.1.408",
+    "ruff>=0.15.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["nonebot_plugin_nospam"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "nonebot_plugin_nospam",
+    "README.md",
+    "pyproject.toml",
+]
+
+
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = [
+    "F",
+    "W",
+    "E",
+    "I",
+    "C90",
+    "N",
+    "PL",
+    "UP",
+    "YTT",
+    "ANN",
+    "ASYNC",
+    "BLE",
+    "FBT",
+    "B",
+    "A",
+    "COM",
+    "C4",
+    "DTZ",
+    "T10",
+    "ICN",
+    "PIE",
+    "T20",
+    "PYI",
+    "Q",
+    "RSE",
+    "RET",
+    "SIM",
+    "SLOT",
+    "TID",
+    "TC",
+    "ARG",
+    "PTH",
+    "FAST",
+    "PERF",
+    "PGH",
+    "FURB",
+    "TRY",
+    "RUF",
+]
+ignore = [
+    "E402",
+    "B008",
+    "UP037",
+    "ANN202",
+    "ANN401",
+    "COM812",
+    "PLC0415",
+]
+allowed-confusables = ["，", "。", "“", "”", "：", "；", "？", "！", "【", "】", "《", "》", "…", "（", "）", "、"]
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.pyright]
+pythonVersion = "3.10"
+pythonPlatform = "All"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
