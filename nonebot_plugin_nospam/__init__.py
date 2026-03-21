@@ -7,13 +7,14 @@ from .service import NoSpamService
 
 __plugin_meta__: PluginMetadata = PluginMetadata(
     name="QQ群刷屏防护",
-    description="检测 QQ 群内重复或相似消息，并自动撤回与禁言刷屏成员",
+    description="防刷屏！检测 QQ 群内重复或相似消息，并自动撤回与禁言刷屏成员",
     usage=(
         "无需指令\n"
         "按配置的群白名单或黑名单自动检测刷屏\n"
         "支持普通消息与群戳一戳事件，命中阈值后自动执行撤回与禁言"
     ),
     type="application",
+    homepage="https://github.com/TU-O0T/nonebot-plugin-nospam",
     config=Config,
     supported_adapters={"~onebot.v11", "~milky"},
 )

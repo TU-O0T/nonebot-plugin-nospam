@@ -7,7 +7,7 @@ _✨ NoneBot2 智能 QQ 群刷屏防护插件 ✨_
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="python">
-  <img src="https://img.shields.io/badge/nonebot2-2.4.4+-red.svg" alt="nonebot2">
+  <img src="https://img.shields.io/badge/nonebot2-2.3.0+-red.svg" alt="nonebot2">
   <a href="https://github.com/astral-sh/uv">
   <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" alt="uv">
   </a>
