@@ -128,37 +128,23 @@ def _normalize_notice_event(event: Event) -> EventContext | None:
         return None
 
     data = getattr(event, "data", None)
+    exact_action, exact_suffix = _normalize_notice_display_fields(data, fuzzy=False)
+    fuzzy_action, fuzzy_suffix = _normalize_notice_display_fields(data, fuzzy=True)
     exact_payload: NormalizedMap = {
         "kind": "notice",
         "type": "nudge",
         "target_id": _coerce_int(
             getattr(event, "target_id", None) or getattr(data, "receiver_id", None)
         ),
-        "display_action": _normalize_scalar(
-            getattr(data, "display_action", None),
-            key="display_action",
-            fuzzy=False,
-        ),
-        "display_suffix": _normalize_scalar(
-            getattr(data, "display_suffix", None),
-            key="display_suffix",
-            fuzzy=False,
-        ),
+        "display_action": exact_action,
+        "display_suffix": exact_suffix,
     }
     fuzzy_payload: NormalizedMap = {
         "kind": "notice",
         "type": "nudge",
         "target_id": exact_payload["target_id"],
-        "display_action": _normalize_scalar(
-            getattr(data, "display_action", None),
-            key="display_action",
-            fuzzy=True,
-        ),
-        "display_suffix": _normalize_scalar(
-            getattr(data, "display_suffix", None),
-            key="display_suffix",
-            fuzzy=True,
-        ),
+        "display_action": fuzzy_action,
+        "display_suffix": fuzzy_suffix,
     }
 
     return EventContext(
@@ -167,20 +153,7 @@ def _normalize_notice_event(event: Event) -> EventContext | None:
         exact_key=_dump_payload(exact_payload),
         fuzzy_key=_dump_payload(fuzzy_payload),
         structure_key=("notice", "nudge"),
-        text_content=_join_text_parts(
-            [
-                _normalize_scalar(
-                    getattr(data, "display_action", None),
-                    key="display_action",
-                    fuzzy=True,
-                ),
-                _normalize_scalar(
-                    getattr(data, "display_suffix", None),
-                    key="display_suffix",
-                    fuzzy=True,
-                ),
-            ]
-        ),
+        text_content=_join_text_parts([fuzzy_action, fuzzy_suffix]),
         event_name=event.get_event_name(),
         event_time=_extract_event_time(event),
     )
@@ -399,6 +372,25 @@ def _extract_message_text_content(message: Message) -> str | None:
     return _join_text_parts(parts)
 
 
+def _normalize_notice_display_fields(
+    data: object,
+    *,
+    fuzzy: bool,
+) -> tuple[NormalizedValue | None, NormalizedValue | None]:
+    return (
+        _normalize_scalar(
+            getattr(data, "display_action", None),
+            key="display_action",
+            fuzzy=fuzzy,
+        ),
+        _normalize_scalar(
+            getattr(data, "display_suffix", None),
+            key="display_suffix",
+            fuzzy=fuzzy,
+        ),
+    )
+
+
 def _collect_text_parts(value: object) -> list[str]:
     if value is None:
         return []
@@ -414,13 +406,7 @@ def _collect_text_parts(value: object) -> list[str]:
                 parts.extend(_collect_text_parts(item))
         return parts
 
-    if isinstance(value, Sequence) and not isinstance(value, str):
-        parts: list[str] = []
-        for item in value:
-            parts.extend(_collect_text_parts(item))
-        return parts
-
-    if isinstance(value, set):
+    if isinstance(value, (Sequence, set)) and not isinstance(value, str):
         parts: list[str] = []
         for item in value:
             parts.extend(_collect_text_parts(item))

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from time import monotonic
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
-from .models import EventContext, GroupState, PenaltyRecord, SpamRecord
+from .models import (
+    EventContext,
+    GroupState,
+    ImageFingerprint,
+    PenaltyRecord,
+    SpamRecord,
+)
 from .moderation import activate_group, handle_delayed_event, punish
 from .normalize import normalize_event
 from .vision import images_are_same
@@ -15,6 +22,13 @@ if TYPE_CHECKING:
 
     from .config import Config
     from .types import GroupKey
+
+
+@dataclass(slots=True)
+class _HandleResult:
+    action: Literal["ignore", "follow_up", "punish"] = "ignore"
+    matched_count: int = 0
+    matched_records: list[SpamRecord] = field(default_factory=list)
 
 
 class NoSpamService:
@@ -33,22 +47,41 @@ class NoSpamService:
         if context is None:
             return
 
-        if self.config.nospam_ignore_self and str(context.user_id) == str(bot.self_id):
-            return
-
-        if not self.config.should_filter_group(context.group_id):
+        if self._should_ignore_context(bot, context):
             return
 
         group_key = self._make_group_key(bot, context.group_id)
         state = self._groups.setdefault(group_key, GroupState())
+        result = await self._evaluate_context(bot, context, state)
 
-        should_follow_up = False
-        should_punish = False
-        matched_count = 0
-        matched_records: list[SpamRecord] = []
+        if result.action == "punish":
+            await punish(
+                bot=bot,
+                context=context,
+                mute_duration=int(self.config.nospam_mute_duration),
+                matched_count=result.matched_count,
+                matched_records=result.matched_records,
+            )
+        elif result.action == "follow_up":
+            await handle_delayed_event(bot, context)
+
+    def _should_ignore_context(self, bot: Bot, context: EventContext) -> bool:
+        if self.config.nospam_ignore_self and str(context.user_id) == str(bot.self_id):
+            return True
+
+        return not self.config.should_filter_group(context.group_id)
+
+    async def _evaluate_context(
+        self,
+        bot: Bot,
+        context: EventContext,
+        state: GroupState,
+    ) -> _HandleResult:
+        result = _HandleResult()
+
         async with state.lock:
             if not await activate_group(bot, context.group_id, state):
-                return
+                return result
 
             now = monotonic()
             penalty = state.penalties.get(context.user_id)
@@ -57,42 +90,48 @@ class NoSpamService:
                 penalty=penalty,
                 now=now,
             ):
-                should_follow_up = True
-            else:
-                if penalty is not None and penalty.delayed_until <= now:
-                    state.penalties.pop(context.user_id, None)
-                matched_count, matched_records = self._remember_event(
-                    state,
-                    context,
-                    now,
-                )
-                should_punish = matched_count >= self.config.nospam_threshold
-                if should_punish:
-                    state.records.pop(context.user_id, None)
-                    state.penalties[context.user_id] = PenaltyRecord(
-                        delayed_until=now + self.delayed_grace_seconds,
-                        exact_key=context.exact_key,
-                        fuzzy_key=context.fuzzy_key,
-                        structure_key=context.structure_key,
-                        text_content=context.text_content,
-                        source_event_time=context.event_time,
-                        image_segment_count=context.image_segment_count,
-                        image_fingerprints=context.image_fingerprints,
-                    )
+                result.action = "follow_up"
+                return result
 
-        if should_punish:
-            await punish(
-                bot=bot,
-                context=context,
-                mute_duration=int(self.config.nospam_mute_duration),
-                matched_count=matched_count,
-                matched_records=matched_records,
+            if penalty is not None and penalty.delayed_until <= now:
+                state.penalties.pop(context.user_id, None)
+
+            matched_count, matched_records = self._remember_event(
+                state,
+                context,
+                now,
             )
-        elif should_follow_up:
-            await handle_delayed_event(bot, context)
+            if matched_count < self.config.nospam_threshold:
+                return result
+
+            state.records.pop(context.user_id, None)
+            state.penalties[context.user_id] = self._build_penalty_record(
+                context,
+                now,
+            )
+            result.action = "punish"
+            result.matched_count = matched_count
+            result.matched_records = matched_records
+            return result
 
     def _make_group_key(self, bot: Bot, group_id: int) -> GroupKey:
         return (type(bot).__module__, str(bot.self_id), group_id)
+
+    def _build_penalty_record(
+        self,
+        context: EventContext,
+        now: float,
+    ) -> PenaltyRecord:
+        return PenaltyRecord(
+            delayed_until=now + self.delayed_grace_seconds,
+            exact_key=context.exact_key,
+            fuzzy_key=context.fuzzy_key,
+            structure_key=context.structure_key,
+            text_content=context.text_content,
+            source_event_time=context.event_time,
+            image_segment_count=context.image_segment_count,
+            image_fingerprints=context.image_fingerprints,
+        )
 
     def _remember_event(
         self,
@@ -138,8 +177,9 @@ class NoSpamService:
             left_text=context.text_content,
             right_structure=record.structure_key,
             right_text=record.text_content,
-            image_related=(
-                context.image_segment_count > 0 or record.image_segment_count > 0
+            image_related=self._is_image_related(
+                context.image_segment_count,
+                record.image_segment_count,
             ),
         )
 
@@ -148,25 +188,17 @@ class NoSpamService:
         context: EventContext,
         record: SpamRecord,
     ) -> bool:
-        if context.image_segment_count == 0 and record.image_segment_count == 0:
-            return True
-
-        if context.image_segment_count != record.image_segment_count:
-            return False
-
-        if (
-            len(context.image_fingerprints) != context.image_segment_count
-            or len(record.image_fingerprints) != record.image_segment_count
-        ):
-            return context.exact_key == record.exact_key
-
-        return all(
-            images_are_same(left, right)
-            for left, right in zip(
+        return self._image_fingerprints_match(
+            left=(
+                context.image_segment_count,
                 context.image_fingerprints,
+                context.exact_key,
+            ),
+            right=(
+                record.image_segment_count,
                 record.image_fingerprints,
-                strict=True,
-            )
+                record.exact_key,
+            ),
         )
 
     def _is_delayed_follow_up(
@@ -202,8 +234,9 @@ class NoSpamService:
             left_text=context.text_content,
             right_structure=penalty.structure_key,
             right_text=penalty.text_content,
-            image_related=(
-                context.image_segment_count > 0 or penalty.image_segment_count > 0
+            image_related=self._is_image_related(
+                context.image_segment_count,
+                penalty.image_segment_count,
             ),
         )
 
@@ -246,23 +279,48 @@ class NoSpamService:
         context: EventContext,
         penalty: PenaltyRecord,
     ) -> bool:
-        if context.image_segment_count == 0 and penalty.image_segment_count == 0:
+        return self._image_fingerprints_match(
+            left=(
+                context.image_segment_count,
+                context.image_fingerprints,
+                context.exact_key,
+            ),
+            right=(
+                penalty.image_segment_count,
+                penalty.image_fingerprints,
+                penalty.exact_key,
+            ),
+        )
+
+    def _image_fingerprints_match(
+        self,
+        *,
+        left: tuple[int, tuple[ImageFingerprint, ...], str],
+        right: tuple[int, tuple[ImageFingerprint, ...], str],
+    ) -> bool:
+        left_count, left_fingerprints, left_exact_key = left
+        right_count, right_fingerprints, right_exact_key = right
+
+        if left_count == 0 and right_count == 0:
             return True
 
-        if context.image_segment_count != penalty.image_segment_count:
+        if left_count != right_count:
             return False
 
         if (
-            len(context.image_fingerprints) != context.image_segment_count
-            or len(penalty.image_fingerprints) != penalty.image_segment_count
+            len(left_fingerprints) != left_count
+            or len(right_fingerprints) != right_count
         ):
-            return context.exact_key == penalty.exact_key
+            return left_exact_key == right_exact_key
 
         return all(
             images_are_same(left, right)
             for left, right in zip(
-                context.image_fingerprints,
-                penalty.image_fingerprints,
+                left_fingerprints,
+                right_fingerprints,
                 strict=True,
             )
         )
+
+    def _is_image_related(self, left_count: int, right_count: int) -> bool:
+        return left_count > 0 or right_count > 0

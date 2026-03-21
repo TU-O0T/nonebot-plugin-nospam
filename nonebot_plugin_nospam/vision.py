@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from io import BytesIO
 from time import monotonic
 from typing import TYPE_CHECKING, Final
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
+import httpx
 from nonebot.log import logger
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -187,27 +186,32 @@ def _extract_image_source_url(segment: MessageSegment) -> str | None:
 
 async def _download_image_bytes(source_url: str) -> bytes | None:
     try:
-        return await asyncio.to_thread(_download_image_bytes_sync, source_url)
-    except (OSError, URLError, TimeoutError) as exception:
+        async with (
+            httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=DOWNLOAD_TIMEOUT,
+            ) as client,
+        ):
+            client.headers.pop("User-Agent", None)
+            async with client.stream("GET", source_url) as response:
+                response.raise_for_status()
+                payload = bytearray()
+                async for chunk in response.aiter_bytes():
+                    payload.extend(chunk)
+                    if len(payload) > DOWNLOAD_MAX_BYTES:
+                        logger.debug(
+                            "防刷屏 图片 {} 下载体积超过限制，跳过视觉检测",
+                            source_url,
+                        )
+                        return None
+    except (OSError, TimeoutError, httpx.HTTPError) as exception:
         logger.opt(exception=exception).debug(
             "防刷屏 下载图片 {} 失败，跳过视觉检测",
             source_url,
         )
         return None
 
-
-def _download_image_bytes_sync(source_url: str) -> bytes:
-    request = Request(
-        source_url,
-        headers={
-            "User-Agent": "nonebot-plugin-nospam/0.1.0",
-        },
-    )
-    with urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
-        payload = response.read(DOWNLOAD_MAX_BYTES + 1)
-    if len(payload) > DOWNLOAD_MAX_BYTES:
-        raise TimeoutError
-    return payload
+    return bytes(payload)
 
 
 def _fingerprint_from_bytes(image_bytes: bytes) -> ImageFingerprint | None:
