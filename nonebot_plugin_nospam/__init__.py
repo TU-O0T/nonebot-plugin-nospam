@@ -1,6 +1,7 @@
 from nonebot import get_plugin_config, on_message, on_notice
 from nonebot.adapters import Bot, Event
 from nonebot.plugin import PluginMetadata
+from nonebot.rule import Rule
 
 from .config import Config
 from .service import NoSpamService
@@ -28,12 +29,19 @@ async def handle_group_event(bot: Bot, event: Event) -> None:
     await nospam_service.handle_event(bot, event)
 
 
+def is_supported_adapter(bot: Bot) -> bool:
+    """检查当前 Bot 适配器是否受支持"""
+    return bot.adapter.get_name() in {"OneBot V11", "Milky"}
+
+
 message_matcher = on_message(
+    rule=Rule(is_supported_adapter),
     priority=1,
     block=False,
     handlers=[handle_group_event],
 )
 notice_matcher = on_notice(
+    rule=Rule(is_supported_adapter),
     priority=1,
     block=False,
     handlers=[handle_group_event],

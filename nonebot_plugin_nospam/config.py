@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, NonNegativeInt, PositiveInt
+from pydantic import BaseModel, Field
 
 
 class Config(BaseModel):
@@ -12,7 +12,7 @@ class Config(BaseModel):
     nospam_groups: set[int] = Field(default_factory=set)
     """群白名单或黑名单"""
 
-    nospam_window_seconds: PositiveInt = 15
+    nospam_window_seconds: int = Field(default=15, gt=0)
     """滑动窗口时长，单位为秒"""
 
     nospam_threshold: int = Field(default=4, ge=2)
@@ -21,7 +21,7 @@ class Config(BaseModel):
     nospam_similarity_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
     """模糊匹配的相似度阈值"""
 
-    nospam_mute_duration: NonNegativeInt = 600
+    nospam_mute_duration: int = Field(default=600, ge=0)
     """禁言时长，设为 0 时仅撤回不禁言"""
 
     nospam_ignore_self: bool = True
