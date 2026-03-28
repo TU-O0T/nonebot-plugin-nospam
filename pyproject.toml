@@ -1,7 +1,7 @@
 [project]
 name = "nonebot-plugin-nospam"
-version = "0.1.6"
-description = "防刷屏！nonebot2插件，检测 QQ 群内重复或相似消息，并自动撤回与禁言刷屏成员"
+version = "0.2.0"
+description = "防刷屏！nonebot2插件，检测群内重复或相似消息，并自动撤回与禁言刷屏成员"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
 authors = [
@@ -19,6 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.28.1",
+    "nonebot-plugin-alconna>=0.61.1",
     "nonebot2>=2.3.0",
     "pillow>=10.4.0",
 ]

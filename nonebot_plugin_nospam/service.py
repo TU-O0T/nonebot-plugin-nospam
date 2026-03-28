@@ -43,7 +43,7 @@ class NoSpamService:
 
     async def handle_event(self, bot: Bot, event: Event) -> None:
         """处理单条事件"""
-        context = await normalize_event(event)
+        context = await normalize_event(bot, event)
         if context is None:
             return
 
@@ -157,7 +157,6 @@ class NoSpamService:
             structure_key=context.structure_key,
             text_content=context.text_content,
             message_id=context.message_id,
-            message_seq=context.message_seq,
             image_segment_count=context.image_segment_count,
             image_fingerprints=context.image_fingerprints,
         )

@@ -6,13 +6,19 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
-from nonebot.adapters import Message, MessageSegment
+from nonebot_plugin_alconna.uniseg import (
+    Segment,
+    Text,
+    UniMessage,
+    get_message_id,
+    get_target,
+)
 
 from .models import EventContext, ImageFingerprint
 from .vision import build_image_visual_payload
 
 if TYPE_CHECKING:
-    from nonebot.adapters import Event
+    from nonebot.adapters import Bot, Event
 
     from .types import NormalizedList, NormalizedMap, NormalizedValue
 
@@ -50,11 +56,11 @@ VOLATILE_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 
-async def normalize_event(event: Event) -> EventContext | None:
+async def normalize_event(bot: Bot, event: Event) -> EventContext | None:
     """归一化消息事件或群提醒事件"""
     event_type = event.get_type()
     if event_type == "message":
-        return await _normalize_message_event(event)
+        return await _normalize_message_event(bot, event)
     if event_type == "notice":
         return _normalize_notice_event(event)
     return None
@@ -74,14 +80,14 @@ def extract_role(member: object) -> str | None:
     return normalized or None
 
 
-async def _normalize_message_event(event: Event) -> EventContext | None:
+async def _normalize_message_event(bot: Bot, event: Event) -> EventContext | None:
     group_id = _extract_group_id(event)
     user_id = _extract_user_id(event)
     if group_id is None or user_id is None:
         return None
 
     try:
-        message = event.get_message()
+        message = UniMessage.of(event.get_message(), bot=bot)
     except Exception:  # noqa: BLE001
         return None
 
@@ -90,7 +96,7 @@ async def _normalize_message_event(event: Event) -> EventContext | None:
         fuzzy_segments,
         image_segment_count,
         image_fingerprints,
-    ) = await _normalize_message_segments(message)
+    ) = await _normalize_message_segments(message, bot=bot, event=event)
 
     exact_payload: NormalizedMap = {
         "kind": "message",
@@ -109,8 +115,8 @@ async def _normalize_message_event(event: Event) -> EventContext | None:
         structure_key=tuple(segment.type.casefold() for segment in message),
         text_content=_extract_message_text_content(message),
         event_name=event.get_event_name(),
-        message_id=_coerce_int(getattr(event, "message_id", None)),
-        message_seq=_extract_message_seq(event),
+        message_id=_safe_get_message_id(bot, event),
+        target=_safe_get_target(bot, event),
         event_time=_extract_event_time(event),
         image_segment_count=image_segment_count,
         image_fingerprints=image_fingerprints,
@@ -195,18 +201,6 @@ def _extract_user_id(event: Event) -> int | None:
     return None
 
 
-def _extract_message_seq(event: Event) -> int | None:
-    direct_message_seq = _coerce_int(getattr(event, "message_seq", None))
-    if direct_message_seq is not None:
-        return direct_message_seq
-
-    data = getattr(event, "data", None)
-    if data is None:
-        return None
-
-    return _coerce_int(getattr(data, "message_seq", None))
-
-
 def _extract_event_time(event: Event) -> int | None:
     direct_event_time = _coerce_int(getattr(event, "time", None))
     if direct_event_time is not None:
@@ -219,15 +213,23 @@ def _extract_event_time(event: Event) -> int | None:
     return _coerce_int(getattr(data, "time", None))
 
 
-def _normalize_segment(segment: MessageSegment, *, fuzzy: bool) -> NormalizedMap:
-    return {
+def _normalize_segment(segment: Segment, *, fuzzy: bool) -> NormalizedMap:
+    normalized: NormalizedMap = {
         "type": segment.type.casefold(),
         "data": _normalize_mapping(segment.data, fuzzy=fuzzy),
     }
+    if segment.children:
+        normalized["children"] = [
+            _normalize_segment(child, fuzzy=fuzzy) for child in segment.children
+        ]
+    return normalized
 
 
 async def _normalize_message_segments(
-    message: Message,
+    message: UniMessage,
+    *,
+    bot: Bot,
+    event: Event,
 ) -> tuple[
     NormalizedList,
     NormalizedList,
@@ -246,7 +248,7 @@ async def _normalize_message_segments(
                 exact_segment,
                 fuzzy_segment,
                 fingerprint,
-            ) = await build_image_visual_payload(segment)
+            ) = await build_image_visual_payload(segment, bot=bot, event=event)
             if fingerprint is None:
                 exact_segments.append(_normalize_segment(segment, fuzzy=False))
                 fuzzy_segments.append(_normalize_segment(segment, fuzzy=True))
@@ -294,9 +296,9 @@ def _normalize_scalar(
         return None
 
     normalized: NormalizedValue | None
-    if isinstance(value, MessageSegment):
+    if isinstance(value, Segment):
         normalized = _normalize_segment(value, fuzzy=fuzzy)
-    elif isinstance(value, Message):
+    elif isinstance(value, UniMessage):
         normalized = [_normalize_segment(segment, fuzzy=fuzzy) for segment in value]
     elif isinstance(value, Mapping):
         normalized = _normalize_nested_mapping(value, fuzzy=fuzzy)
@@ -365,11 +367,8 @@ def _normalize_text(value: str, *, fuzzy: bool) -> str:
     return fuzzy_normalized or normalized
 
 
-def _extract_message_text_content(message: Message) -> str | None:
-    parts: list[str] = []
-    for segment in message:
-        parts.extend(_collect_text_parts(segment.data))
-    return _join_text_parts(parts)
+def _extract_message_text_content(message: UniMessage) -> str | None:
+    return _join_text_parts([segment.text for segment in message.select(Text)])
 
 
 def _normalize_notice_display_fields(
@@ -443,3 +442,17 @@ def _coerce_int(value: object | None) -> int | None:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return None
+
+
+def _safe_get_message_id(bot: Bot, event: Event) -> str | None:
+    try:
+        return get_message_id(event=event, bot=bot)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _safe_get_target(bot: Bot, event: Event):
+    try:
+        return get_target(event=event, bot=bot)
+    except Exception:  # noqa: BLE001
+        return None

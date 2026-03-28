@@ -4,6 +4,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Final
 
 from nonebot.log import logger
+from nonebot_plugin_alconna.uniseg import message_recall
 
 from .normalize import extract_role
 
@@ -26,6 +27,23 @@ async def activate_group(bot: Bot, group_id: int, state: GroupState) -> bool:
     ):
         return state.enabled
 
+    was_activated = state.activated
+    previous_role = state.bot_role
+    previous_enabled = state.enabled
+    state.last_role_check_at = now
+
+    get_group_member_info = getattr(bot, "get_group_member_info", None)
+    if not callable(get_group_member_info):
+        state.activated = True
+        state.bot_role = "unknown"
+        state.enabled = True
+        if not was_activated:
+            logger.info(
+                "防刷屏 已在群 {} 激活，当前适配器未提供群权限查询，按能力探测模式运行",
+                group_id,
+            )
+        return True
+
     try:
         bot_user_id = int(str(bot.self_id))
     except ValueError:
@@ -35,11 +53,6 @@ async def activate_group(bot: Bot, group_id: int, state: GroupState) -> bool:
             bot.self_id,
         )
         return False
-
-    was_activated = state.activated
-    previous_role = state.bot_role
-    previous_enabled = state.enabled
-    state.last_role_check_at = now
 
     role = await fetch_group_role(bot=bot, group_id=group_id, user_id=bot_user_id)
     if role is None:
@@ -149,7 +162,6 @@ async def recall_event(bot: Bot, context: EventContext) -> bool:
         bot=bot,
         group_id=context.group_id,
         message_id=context.message_id,
-        message_seq=context.message_seq,
     )
 
 
@@ -161,27 +173,20 @@ async def recall_records(
     """批量撤回命中窗口内可撤回的消息"""
     recalled_count = 0
     recallable_count = 0
-    seen_message_ids: set[int] = set()
-    seen_message_seqs: set[int] = set()
+    seen_message_ids: set[str] = set()
 
     for record in matched_records:
-        if record.message_id is None and record.message_seq is None:
+        if record.message_id is None:
             continue
-        if record.message_id is not None:
-            if record.message_id in seen_message_ids:
-                continue
-            seen_message_ids.add(record.message_id)
-        if record.message_seq is not None:
-            if record.message_seq in seen_message_seqs:
-                continue
-            seen_message_seqs.add(record.message_seq)
+        if record.message_id in seen_message_ids:
+            continue
+        seen_message_ids.add(record.message_id)
 
         recallable_count += 1
         if await _recall_message(
             bot=bot,
             group_id=group_id,
             message_id=record.message_id,
-            message_seq=record.message_seq,
         ):
             recalled_count += 1
 
@@ -191,38 +196,26 @@ async def recall_records(
 async def _recall_message(
     bot: Bot,
     group_id: int,
-    message_id: int | None,
-    message_seq: int | None,
+    message_id: str | None,
 ) -> bool:
     """按消息标识执行撤回"""
-    if message_id is not None:
-        try:
-            await bot.delete_msg(message_id=message_id)
-        except Exception as exception:  # noqa: BLE001
-            logger.opt(exception=exception).warning(
-                "防刷屏 撤回 OneBot 消息 {} 失败，群 {}",
-                message_id,
-                group_id,
-            )
-            return False
-        return True
+    if message_id is None:
+        return False
 
-    if message_seq is not None:
-        try:
-            await bot.recall_group_message(
-                group_id=group_id,
-                message_seq=message_seq,
-            )
-        except Exception as exception:  # noqa: BLE001
-            logger.opt(exception=exception).warning(
-                "防刷屏 撤回 Milky 消息 {} 失败，群 {}",
-                message_seq,
-                group_id,
-            )
-            return False
-        return True
-
-    return False
+    try:
+        await message_recall(
+            message_id=message_id,
+            bot=bot,
+            adapter=bot.adapter.get_name(),
+        )
+    except Exception as exception:  # noqa: BLE001
+        logger.opt(exception=exception).warning(
+            "防刷屏 通过 uniseg 撤回消息 {} 失败，群 {}",
+            message_id,
+            group_id,
+        )
+        return False
+    return True
 
 
 async def mute_user(bot: Bot, context: EventContext, duration: int) -> bool:
@@ -230,55 +223,73 @@ async def mute_user(bot: Bot, context: EventContext, duration: int) -> bool:
     if duration <= 0:
         return False
 
-    module_name = type(bot).__module__
-    if ".onebot.v11." in module_name:
-        return await _call_mute_api(
+    for api_name, payload in _iter_mute_api_payloads(context, duration):
+        if await _call_mute_api(
             bot=bot,
             context=context,
-            duration=duration,
-            api_name="set_group_ban",
+            api_name=api_name,
+            payload=payload,
+        ):
+            return True
+    return False
+
+
+def _iter_mute_api_payloads(
+    context: EventContext,
+    duration: int,
+) -> tuple[tuple[str, dict[str, int | str]], ...]:
+    payloads: list[tuple[str, dict[str, int | str]]] = [
+        (
+            "set_group_ban",
+            {
+                "group_id": context.group_id,
+                "user_id": context.user_id,
+                "duration": duration,
+            },
+        ),
+        (
+            "set_group_member_mute",
+            {
+                "group_id": context.group_id,
+                "user_id": context.user_id,
+                "duration": duration,
+            },
+        ),
+    ]
+    if context.target is not None:
+        payloads.extend(
+            [
+                (
+                    "mute_member",
+                    {
+                        "guild_id": context.target.parent_id,
+                        "user_id": str(context.user_id),
+                        "seconds": duration,
+                    },
+                ),
+                (
+                    "mute_member",
+                    {
+                        "channel_id": context.target.id,
+                        "user_id": str(context.user_id),
+                        "seconds": duration,
+                    },
+                ),
+            ]
         )
-
-    if ".milky." in module_name:
-        return await _call_mute_api(
-            bot=bot,
-            context=context,
-            duration=duration,
-            api_name="set_group_member_mute",
-        )
-
-    if await _call_mute_api(
-        bot=bot,
-        context=context,
-        duration=duration,
-        api_name="set_group_ban",
-    ):
-        return True
-
-    return await _call_mute_api(
-        bot=bot,
-        context=context,
-        duration=duration,
-        api_name="set_group_member_mute",
-    )
+    return tuple(payloads)
 
 
 async def _call_mute_api(
     bot: Bot,
     context: EventContext,
-    duration: int,
     api_name: str,
+    payload: dict[str, int | str],
 ) -> bool:
-    payload: dict[str, int] = {
-        "group_id": context.group_id,
-        "user_id": context.user_id,
-        "duration": duration,
-    }
-
     try:
         await bot.call_api(api_name, **payload)
     except Exception as exception:  # noqa: BLE001
-        logger.opt(exception=exception).warning(
+        logger.opt(exception=exception).debug(
             "防刷屏 通过 {} 禁言群 {} 的用户 {} 失败",
             api_name,
             context.group_id,

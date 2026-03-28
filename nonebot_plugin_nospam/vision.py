@@ -5,17 +5,20 @@ import hashlib
 import math
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Final
 
 import httpx
 from nonebot.log import logger
+from nonebot_plugin_alconna.uniseg import Image as UniImage
+from nonebot_plugin_alconna.uniseg import image_fetch
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .models import ImageFingerprint
 
 if TYPE_CHECKING:
-    from nonebot.adapters import MessageSegment
+    from nonebot.adapters import Bot, Event
 
     from .types import NormalizedMap
 
@@ -60,10 +63,13 @@ _EDGE_SIGNATURE_THRESHOLD: Final[_SignatureThreshold] = _SignatureThreshold(
 
 
 async def build_image_visual_payload(
-    segment: MessageSegment,
+    segment: UniImage,
+    *,
+    bot: Bot,
+    event: Event,
 ) -> tuple[NormalizedMap, NormalizedMap, ImageFingerprint | None]:
     """构建图片消息段的视觉归一化结果"""
-    fingerprint = await get_image_fingerprint(segment)
+    fingerprint = await get_image_fingerprint(segment, bot=bot, event=event)
     if fingerprint is None:
         return (
             {"type": segment.type.casefold(), "data": {}},
@@ -94,17 +100,22 @@ async def build_image_visual_payload(
     return exact_payload, fuzzy_payload, fingerprint
 
 
-async def get_image_fingerprint(segment: MessageSegment) -> ImageFingerprint | None:
+async def get_image_fingerprint(
+    segment: UniImage,
+    *,
+    bot: Bot,
+    event: Event,
+) -> ImageFingerprint | None:
     """从图片消息段提取视觉指纹"""
-    source_url = _extract_image_source_url(segment)
-    if source_url is None:
+    cache_key = _build_image_cache_key(segment, bot=bot)
+    if cache_key is None:
         return None
 
-    cached = _get_cached_fingerprint(source_url)
+    cached = _get_cached_fingerprint(cache_key)
     if cached is not None:
         return cached
 
-    image_bytes = await _download_image_bytes(source_url)
+    image_bytes = await _resolve_image_bytes(segment, bot=bot, event=event)
     if image_bytes is None:
         return None
 
@@ -112,7 +123,7 @@ async def get_image_fingerprint(segment: MessageSegment) -> ImageFingerprint | N
     if fingerprint is None:
         return None
 
-    _fingerprint_cache[source_url] = _CachedFingerprint(
+    _fingerprint_cache[cache_key] = _CachedFingerprint(
         expires_at=monotonic() + CACHE_TTL_SECONDS,
         fingerprint=fingerprint,
     )
@@ -159,29 +170,63 @@ def images_are_same(
     )
 
 
-def _get_cached_fingerprint(source_url: str) -> ImageFingerprint | None:
-    cached = _fingerprint_cache.get(source_url)
+def _get_cached_fingerprint(cache_key: str) -> ImageFingerprint | None:
+    cached = _fingerprint_cache.get(cache_key)
     if cached is None:
         return None
 
     if cached.expires_at <= monotonic():
-        _fingerprint_cache.pop(source_url, None)
+        _fingerprint_cache.pop(cache_key, None)
         return None
 
     return cached.fingerprint
 
 
-def _extract_image_source_url(segment: MessageSegment) -> str | None:
-    for key in ("temp_url", "url"):
-        value = segment.data.get(key)
-        if isinstance(value, str) and value.startswith(("http://", "https://")):
-            return value
-
-    file_value = segment.data.get("file")
-    if isinstance(file_value, str) and file_value.startswith(("http://", "https://")):
-        return file_value
-
+def _build_image_cache_key(segment: UniImage, *, bot: Bot) -> str | None:
+    if segment.raw:
+        return f"raw:{hashlib.sha256(segment.raw_bytes).hexdigest()}"
+    if segment.path:
+        return f"path:{Path(segment.path).expanduser().resolve()}"
+    if segment.url:
+        return f"url:{segment.url}"
+    if segment.id:
+        return f"id:{bot.adapter.get_name()}:{bot.self_id}:{segment.id}"
     return None
+
+
+async def _resolve_image_bytes(
+    segment: UniImage,
+    *,
+    bot: Bot,
+    event: Event,
+) -> bytes | None:
+    image_bytes: bytes | None = None
+    if segment.raw:
+        image_bytes = segment.raw_bytes
+    elif segment.path:
+        try:
+            image_bytes = await asyncio.to_thread(
+                _read_image_path_bytes,
+                segment.path,
+            )
+        except OSError as exception:
+            logger.opt(exception=exception).debug(
+                "防刷屏 读取图片路径失败，跳过视觉检测",
+            )
+    elif segment.url:
+        image_bytes = await _download_image_bytes(segment.url)
+    elif segment.id:
+        try:
+            image_bytes = await image_fetch(event, bot, {}, segment)
+        except Exception as exception:  # noqa: BLE001
+            logger.opt(exception=exception).debug(
+                "防刷屏 拉取适配器图片资源失败，跳过视觉检测",
+            )
+    return image_bytes
+
+
+def _read_image_path_bytes(path: str | Path) -> bytes:
+    return Path(path).expanduser().read_bytes()
 
 
 async def _download_image_bytes(source_url: str) -> bytes | None:

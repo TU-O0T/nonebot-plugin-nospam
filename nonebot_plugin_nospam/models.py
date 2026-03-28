@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections import deque
 
+    from nonebot_plugin_alconna.uniseg import Target
+
 
 @dataclass(slots=True)
 class ImageFingerprint:
@@ -31,8 +33,7 @@ class SpamRecord:
     fuzzy_key: str
     structure_key: tuple[str, ...]
     text_content: str | None = None
-    message_id: int | None = None
-    message_seq: int | None = None
+    message_id: str | None = None
     image_segment_count: int = 0
     image_fingerprints: tuple[ImageFingerprint, ...] = ()
 
@@ -43,8 +44,7 @@ class SpamRecord:
         fuzzy_key: str,
         structure_key: tuple[str, ...],
         text_content: str | None = None,
-        message_id: int | None = None,
-        message_seq: int | None = None,
+        message_id: str | None = None,
         image_segment_count: int = 0,
         image_fingerprints: tuple[ImageFingerprint, ...] = (),
     ) -> None:
@@ -54,7 +54,6 @@ class SpamRecord:
         self.structure_key = structure_key
         self.text_content = text_content
         self.message_id = message_id
-        self.message_seq = message_seq
         self.image_segment_count = image_segment_count
         self.image_fingerprints = image_fingerprints
 
@@ -104,8 +103,8 @@ class EventContext:
     structure_key: tuple[str, ...]
     text_content: str | None
     event_name: str
-    message_id: int | None = None
-    message_seq: int | None = None
+    message_id: str | None = None
+    target: Target | None = None
     event_time: int | None = None
     image_segment_count: int = 0
     image_fingerprints: tuple[ImageFingerprint, ...] = ()
@@ -119,8 +118,8 @@ class EventContext:
         structure_key: tuple[str, ...],
         text_content: str | None,
         event_name: str,
-        message_id: int | None = None,
-        message_seq: int | None = None,
+        message_id: str | None = None,
+        target: Target | None = None,
         event_time: int | None = None,
         image_segment_count: int = 0,
         image_fingerprints: tuple[ImageFingerprint, ...] = (),
@@ -133,7 +132,7 @@ class EventContext:
         self.text_content = text_content
         self.event_name = event_name
         self.message_id = message_id
-        self.message_seq = message_seq
+        self.target = target
         self.event_time = event_time
         self.image_segment_count = image_segment_count
         self.image_fingerprints = image_fingerprints

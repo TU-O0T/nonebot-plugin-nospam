@@ -1,14 +1,13 @@
 from nonebot import get_plugin_config, on_message, on_notice
 from nonebot.adapters import Bot, Event
 from nonebot.plugin import PluginMetadata
-from nonebot.rule import Rule
 
 from .config import Config
 from .service import NoSpamService
 
 __plugin_meta__: PluginMetadata = PluginMetadata(
-    name="QQ群刷屏防护",
-    description="防刷屏！检测 QQ 群内重复或相似消息，并自动撤回与禁言刷屏成员",
+    name="群刷屏防护",
+    description="防刷屏！nonebot2插件，检测群内重复或相似消息，并自动撤回与禁言刷屏成员",
     usage=(
         "无需指令\n"
         "按配置的群白名单或黑名单自动检测刷屏\n"
@@ -17,7 +16,6 @@ __plugin_meta__: PluginMetadata = PluginMetadata(
     type="application",
     homepage="https://github.com/TU-O0T/nonebot-plugin-nospam",
     config=Config,
-    supported_adapters={"~onebot.v11", "~milky"},
 )
 
 config: Config = get_plugin_config(Config)
@@ -29,19 +27,12 @@ async def handle_group_event(bot: Bot, event: Event) -> None:
     await nospam_service.handle_event(bot, event)
 
 
-def is_supported_adapter(bot: Bot) -> bool:
-    """检查当前 Bot 适配器是否受支持"""
-    return bot.adapter.get_name() in {"OneBot V11", "Milky"}
-
-
 message_matcher = on_message(
-    rule=Rule(is_supported_adapter),
     priority=1,
     block=False,
     handlers=[handle_group_event],
 )
 notice_matcher = on_notice(
-    rule=Rule(is_supported_adapter),
     priority=1,
     block=False,
     handlers=[handle_group_event],
