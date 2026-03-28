@@ -1,4 +1,6 @@
-from nonebot import get_plugin_config, on_message, on_notice
+from nonebot import get_plugin_config, on_message, on_notice, require
+require("nonebot_plugin_alconna")
+
 from nonebot.adapters import Bot, Event
 from nonebot.plugin import PluginMetadata
 
